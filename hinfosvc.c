@@ -5,26 +5,6 @@
  *                   2021/2022                      *
  * ************************************************ */
 
-/*
-1) OK vytvořte si funkci, která vám vrátí aktuální využití procesoru
-2) OK zjistete si hostname (/proc/sys/kernel/hostname)
-3) OK zjistete si cpu name (popen("cat /proc/cpuinfo | grep "model name" | head -n 1 | awk '...)
-4) OK socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); - vytvoří socket
-5) OK setsockopt na 1 pro SO_REUSEADDR a SO_REUSEPORT - zajistí že nebude záhadně padat při testování
-6) OK struct sockaddr_in address;
-      address.sin_family = AF_INET;
-      address.sin_port = htons(tvujPort);
-      address.sin_addr.s_addr = INADDR_ANY;
-7) OK bind(socket, address) - nastaví socket
-8) OK listen() - socket začne přijímat spojení
-9) while true do accept() - pak můžete se socketem pracovat jako se souborem
-10) pokud spojení začíná na "GET /hostname" (strncmp) nebo jiný z těch tří endpointů...
-11) tak do socketu zapiš "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n" a tvou odpověď, bez nového řádku na konci
-12) Jinak zapiš odpověď se stavem "400 Bad Request"
-13) Pokud tak ještě neučinils, vyčti zbytek dat v socketu ať si třeba prohlížeč nestěžuje
-14) close()  end while
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -32,10 +12,11 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <math.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include <signal.h>
+
 
 /** 
  * Function parses arguments and returns the port number.
@@ -61,30 +42,6 @@ int get_port_num(int argc, char **argv) {
   return (int)port;
 }
 
-/**
- * Function gets the CPU name info from /proc/cpuinfo
- * file and prints it to the stdout.
- *
- * @return 0 if successful, -1 if not
- */
-int cpu_name() {
-  // open a process
-  FILE *p = popen("cat /proc/cpuinfo | grep \"model name\" | head -n 1 | awk -F \": \" '{print $2}'","r");
-  if(p == NULL) {
-    fprintf(stderr, "Process did not open successfully.\n");
-    return -1;
-  }
-
-  // read and print the cpu name
-  int c;
-  while ((c = fgetc(p)) != EOF) {
-    fputc(c, stdout);
-  }
-
-  pclose(p);
-  return 0;
-}
-
 
 /**
  * Functions loads the hostname info from /proc/sys/kernel/hostname 
@@ -92,24 +49,75 @@ int cpu_name() {
  *
  * @return 0 if successful, -1 if the file couldn't be open
  */
-int hostname() {
+char *hostname(char *message, unsigned *capacity) {
   // open file with the hostname information
   FILE *fp = fopen("/proc/sys/kernel/hostname", "r");
   if (fp == NULL) {
     fprintf(stderr, "/proc/sys/kernel/hostname did not open successfully.\n");
-    return -1;
+    return NULL;
   }
 
-  // read and print the hostname to stdout
+  // read and print the hostname to the response
   int c;
+  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
+  unsigned i = strlen("HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
+  
   while ((c = fgetc(fp)) != EOF) {
-    fputc(c, stdout);
+    if (*capacity <= i) {
+      message = realloc(message, *capacity * 2);
+      *capacity *= 2;
+    }
+    message[i++] = c;
   }
+  // remove the newline
+  if (message[i-1] == '\n') {
+    message[i-1] = '\0';
+  }
+  message[i] = '\0';
 
   fclose(fp);
-  return 0;
+  return message;
 }
 
+
+/**
+ * Function gets the CPU name info from /proc/cpuinfo
+ * file and prints it to the stdout.
+ *
+ * @return 0 if successful, -1 if not
+ */
+char *cpu_name(char *message, unsigned *capacity) {
+  // open a process
+  FILE *p = popen("cat /proc/cpuinfo | grep \"model name\" | head -n 1 | awk -F \": \" '{print $2}'","r");
+  if(p == NULL) {
+    fprintf(stderr, "Process did not open successfully.\n");
+    return NULL;
+  }
+
+  // read and print the cpu name
+  int c;
+  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
+  unsigned i = strlen("HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
+  
+  while ((c = fgetc(p)) != EOF) {
+    if (*capacity <= i) {
+      message = realloc(message, *capacity * 2);
+      *capacity *= 2;
+    }
+    message[i++] = c;
+  }
+  // remove the newline
+  if (message[i-1] == '\n') {
+    message[i-1] = '\0';
+  }
+  message[i] = '\0';
+
+  fclose(p);
+  return message;
+}
+
+
+// CPU stats
 enum cpu_info {USER, NICE, SYSTEM, IDLE, IOWAIT, IRQ, SOFTIRQ, STEAL, GUEST, GUEST_NICE};
 
 /**
@@ -133,6 +141,7 @@ int load_stats(long long unsigned a[10]) {
   // save current info
   sscanf(info, "cpu  %llu %llu %llu %llu %llu %llu %llu %llu %llu %llu",
     &a[USER], &a[NICE], &a[SYSTEM], &a[IDLE], &a[IOWAIT], &a[IRQ], &a[SOFTIRQ], &a[STEAL], &a[GUEST], &a[GUEST_NICE]);
+
   pclose(p);
 
   return 0;
@@ -146,9 +155,7 @@ int load_stats(long long unsigned a[10]) {
  *
  * @return load percentage
  */
-int compute_load(long long unsigned f[10], long long unsigned s[10]) {
-  printf("Inside compute_load(), f: %llu, s: %llu\n", f[USER], s[USER]);
-
+double compute_load(long long unsigned f[10], long long unsigned s[10]) {
   long long int prevIdle = f[IDLE] + f[IOWAIT];
   long long int idle = s[IDLE] + s[IOWAIT];
 
@@ -162,10 +169,7 @@ int compute_load(long long unsigned f[10], long long unsigned s[10]) {
   long long int idled = idle - prevIdle;
 
   double cpu_percentage = (totald - idled) / (double)totald;
-
-  // round and convert to percentage
-  // TODO not sure with the rounding and * 100
-  return ((int)(cpu_percentage + 0.5)) * 100;
+  return cpu_percentage * 100;
 }
 
 
@@ -175,107 +179,97 @@ int compute_load(long long unsigned f[10], long long unsigned s[10]) {
  *
  * @return 0 if successful, -1 if not
  */
-int cpu_load() {
+char *cpu_load(char *message) {
   long long unsigned f[10], s[10];
 
   load_stats(f);
   sleep(1);
   load_stats(s);
 
-  int load = compute_load(f, s);
+  double load = compute_load(f, s);
 
-  printf("Done cpu_load(), f: %llu, s: %llu, load: %d\n", f[USER], s[USER], load);
-  return 0;
+  // read and print the load (initial capacity is always bigger)
+  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n%lg%c", load, '%');
+  return message;
 }
 
 
-// Decide which query is asked
+char *bad_req(char *message) {
+  sprintf(message, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain;\r\n\r\nBad Request");
+  return message;
+}
 
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) {  
   // get the port number
   int port = get_port_num(argc, argv);
   if (port == -1) {
     return -1;
   }
 
-  fprintf(stderr, "Arg num = %d, port number = %u\n", argc, port);
-
-  hostname();
-  
-  cpu_name();
-
-  cpu_load();
-
-  // TODO Jindra mel misto 0 IPPROTO_TCP
   int socketfd = socket(AF_INET, SOCK_STREAM, 0);
-  // setsockopt na 1 pro SO_REUSEADDR a SO_REUSEPORT - zajistí že nebude záhadně padat při testování
+  if (socketfd == -1) {
+		fprintf(stderr, "Could not create socket");
+	}
+
   int opt = 1;
   setsockopt(socketfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt));
 
-  struct sockaddr_in address;
-  address.sin_family = AF_INET;
-  address.sin_port = htons(port);
-  address.sin_addr.s_addr = INADDR_ANY;
+  struct sockaddr_in server_address;
+  server_address.sin_family = AF_INET;
+  server_address.sin_port = htons(port);
+  server_address.sin_addr.s_addr = INADDR_ANY;
 
-  bind(socketfd, (struct sockaddr*)&address, sizeof(address));
+  if (bind(socketfd, (struct sockaddr*)&server_address, sizeof(server_address)) == -1) {
+    fprintf(stderr, "Binding error.\n");
+  }
 
-  listen(socketfd, 1);
-
-  /*
-9) while true do accept() - pak můžete se socketem pracovat jako se souborem
-10) pokud spojení začíná na "GET /hostname" (strncmp) nebo jiný z těch tří endpointů...
-11) tak do socketu zapiš "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n" a tvou odpověď, bez nového řádku na konci
-12) Jinak zapiš odpověď se stavem "400 Bad Request"
-13) Pokud tak ještě neučinils, vyčti zbytek dat v socketu ať si třeba prohlížeč nestěžuje
-14) close()  end while
-  */
-
-  char server_message[2000], client_message[2000];
-    
-  // Clean buffers:
-  memset(server_message, '\0', sizeof(server_message));
-  memset(client_message, '\0', sizeof(client_message));
+  if (listen(socketfd, 1) == -1) {
+    fprintf(stderr, "Listening error.\n");
+  }
 
   struct sockaddr client_addr;
   unsigned int client_size = sizeof(client_addr);
-  int client_sock;
+  int client_sockfd;
+  char client_message[2000];
+  memset(client_message, '\0', sizeof(client_message));
+
+  unsigned response_capacity = strlen("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain;\r\n\r\nBad Request");
+  char *server_response = calloc(response_capacity, 1);
+  if (server_response == NULL) {
+    fprintf(stderr, "Couldn't allocate the memory.\n");
+  }
+  memset(server_response, '\0', response_capacity);
 
   while (1) {
-    
-    /*
-    client_sock = accept(socketfd, (struct sockaddr*)&client_addr, &client_size);
-
-    //recv(client_sock, client_message, sizeof(client_message), 0);
-    
-    if (client_sock < 0){
-        printf("Can't accept\n");
-        return -1;
-    }
-    //printf("Client connected at IP: %s and port: %i\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-    
-    // Receive client's message:
-    if (recv(client_sock, client_message, sizeof(client_message), 0) < 0){
-        printf("Couldn't receive\n");
-        return -1;
-    }
-    printf("Msg from client: %s\n", client_message);
-    
-    // Respond to client:
-    strcpy(server_message, "This is the server's message.");
-    
-    if (send(client_sock, server_message, strlen(server_message), 0) < 0){
-        printf("Can't send\n");
-        return -1;
+    client_sockfd = accept(socketfd, (struct sockaddr*)&client_addr, &client_size);
+    if (client_sockfd == -1) {
+      fprintf(stderr, "Client socked not received successfully.\n");
     }
 
-    //send(client_sock, server_message, strlen(server_message), 0);
+    if (read(client_sockfd, &client_message, sizeof(client_message)) == -1) {
+      fprintf(stderr, "Reading error.\n");
+    }
+    
+    // query check
+    if (strncmp(client_message, "GET /hostname ", 14) == 0) {
+      server_response = hostname(server_response, &response_capacity);
+    } else if (strncmp(client_message, "GET /cpu-name ", 14) == 0) {
+      server_response = cpu_name(server_response, &response_capacity);
+    } else if (strncmp(client_message, "GET /load ", 10) == 0) {
+      server_response = cpu_load(server_response);
+    } else {
+      server_response = bad_req(server_response);
+    }
 
-    printf("Client: %s", client_message);
-    //printf("Server: %s", server_message);
-    close(client_sock);
-    */
+    if (send(client_sockfd, server_response, strlen(server_response), 0) == -1){
+      fprintf(stderr, "Can't send a response.\n");
+    }
 
+    memset(client_message, '\0', sizeof(client_message));
+    memset(server_response, '\0', response_capacity);
+    
+    close(client_sockfd);
   }
 
   close(socketfd);
