@@ -1,20 +1,21 @@
 # IPK project 1 - HTTP server
 
+Author:  Lucie Svobodová, xsvobo1x@stud.fit.vutbr.cz  
+Faculty: Faculty of Information Technology, BUT  
+Course:  Computer Communications and Networks (IPK)  
+
 This project implements a lightweight server for Linux that uses HTTP protocol for the communication. The server provides information about the system. It sends HTTP responses for these three queries (that are sent to the server by GET command):
-- hostname (`/hostname`), 
-- cpu-name (`/cpu-name`),
-- current cpu load (`/load`).
+- hostname (`/hostname`) 
+- cpu-name (`/cpu-name`)
+- current cpu load (`/load`)
 
+Error messages are printed to the standard error output (stderr).  
 
-## Installation
+## Build
 
-1. Clone this repository
+Build the project with `make`
 ```
-$ git clone https://github.com/svobodovaLucie/IPK-project1.git
-```
-2. Build the project with make
-```
-$ cd IPK-project1 && make
+$ make
 ```
 
 
