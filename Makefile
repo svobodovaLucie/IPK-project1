@@ -1,7 +1,7 @@
 # /* ******************* Makefile ******************* *
-#  *        Počítačové komunikace a sítě (IPK)        *
-#  *            Lucie Svobodová, xsvobo1x             *
-#  *                 FIT VUT v Brně                   *
+#  *    Computer Communications and Networks (IPK)    *
+#  *            Lucie Svobodova, xsvobo1x             *
+#  *                 		FIT BUT                   		*
 #  *                   2021/2022                      *
 #  * ************************************************ */
 

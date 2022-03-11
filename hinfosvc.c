@@ -1,7 +1,7 @@
 /* ****************** hinfosvc.c ****************** *
- *        Počítačové komunikace a sítě (IPK)        *
- *            Lucie Svobodová, xsvobo1x             *
- *                 FIT VUT v Brně                   *
+ *    Computer Communications and Networks (IPK)    *
+ *            Lucie Svobodova, xsvobo1x             *
+ *                    FIT BUT                       *
  *                   2021/2022                      *
  * ************************************************ */
 
@@ -10,7 +10,6 @@
 #include <limits.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -21,6 +20,8 @@
 enum cpu_info {USER, NICE, SYSTEM, IDLE, IOWAIT, IRQ, SOFTIRQ, STEAL, GUEST, GUEST_NICE};
 // server socket descriptor
 int socketfd;
+// pointer to the socket response
+char *server_response;
 
 /** 
  * Function parses arguments and returns the port number.
@@ -46,6 +47,49 @@ int get_port_num(int argc, char **argv) {
   return (int)port;
 }
 
+/** 
+ * Function reads the name from a file and stores the response in message buffer.
+ *
+ * @return pointer to the message buffer, NULL in the case of allocation error
+ */
+char *get_the_name(FILE *fp, char *message, unsigned *capacity) {
+  // allocate a buffer for storing the cpu name
+  unsigned resp_cap = 50;
+  char *resp = calloc(resp_cap, 1);
+  if (resp == NULL) {
+    fprintf(stderr, "Couldn't allocate the memory in cpu_name().\n");
+    return NULL;
+  }
+  
+  // save the cpu name into resp buffer
+  unsigned i = 0;
+  char c;
+  while ((c = fgetc(fp)) != EOF) {
+    if (resp_cap <= i) {
+      resp = realloc(resp, resp_cap * 2);
+      resp_cap *= 2;
+    }
+    resp[i++] = c;
+  }
+  // remove the newline and insert '\0'
+  if (resp[i-1] == '\n') {
+    resp[i-1] = '\0';
+  }
+  resp[i] = '\0';
+
+  // reallocate the message buffer if needed
+  unsigned final_len = strlen("HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\nContent-Length: \r\n\r\n") + strlen(resp) + 10;
+  if (*capacity <= final_len) {
+    message = realloc(message, final_len);
+    *capacity = final_len;
+  }
+
+  // save the response into message buffer
+  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\nContent-Length: %lu\r\n\r\n%s", strlen(resp), resp);
+  
+  free(resp);
+  return message;
+}
 
 /**
  * Functions loads the hostname info from /proc/sys/kernel/hostname 
@@ -61,24 +105,8 @@ char *hostname(char *message, unsigned *capacity) {
     return NULL;
   }
 
-  // read and save the hostname to the response
-  int c;
-  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
-  unsigned i = strlen("HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
-  
-  while ((c = fgetc(fp)) != EOF) {
-    if (*capacity <= i) {
-      // reallocate the buffer if its capacity is full
-      message = realloc(message, *capacity * 2);
-      *capacity *= 2;
-    }
-    message[i++] = c;
-  }
-  // remove the newline
-  if (message[i-1] == '\n') {
-    message[i-1] = '\0';
-  }
-  message[i] = '\0';
+  // get the name from fp file and save it in the message buffer
+  message = get_the_name(fp, message, capacity);
 
   fclose(fp);
   return message;
@@ -99,23 +127,8 @@ char *cpu_name(char *message, unsigned *capacity) {
     return NULL;
   }
 
-  // read and print the cpu name
-  int c;
-  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
-  unsigned i = strlen("HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n");
-  
-  while ((c = fgetc(p)) != EOF) {
-    if (*capacity <= i) {
-      message = realloc(message, *capacity * 2);
-      *capacity *= 2;
-    }
-    message[i++] = c;
-  }
-  // remove the newline
-  if (message[i-1] == '\n') {
-    message[i-1] = '\0';
-  }
-  message[i] = '\0';
+  // get the name from fp file and save it in the message buffer
+  message = get_the_name(p, message, capacity);
 
   fclose(p);
   return message;
@@ -195,8 +208,11 @@ char *cpu_load(char *message) {
 
   double load = compute_load(f, s);
 
+  // print the result and get the length
+  sprintf(message, "%.4lg", load);
+
   // read and print the load (initial capacity is always bigger - no need to realloc)
-  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\n\r\n%lg%c", load, '%');
+  sprintf(message, "HTTP/1.1 200 OK\r\nContent-Type: text/plain;\r\nContent-Length: %lu\r\n\r\n%.4lg%c", strlen(message), load, '%');
   return message;
 }
 
@@ -207,7 +223,7 @@ char *cpu_load(char *message) {
  * @return pointer to the message buffer
  */
 char *bad_req(char *message) {
-  sprintf(message, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain;\r\n\r\nBad Request");
+  sprintf(message, "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain;\r\nContent-Length: 11\r\n\r\nBad Request");
   return message;
 }
 
@@ -217,8 +233,9 @@ char *bad_req(char *message) {
  * It is called when SIGINT signal is received.
  */
 void release_resources(int sig_num){
-  fprintf(stderr, "[signal %d] -> server socket was closed\n", sig_num);
+  fprintf(stderr, "[signal %d] -> server socket closed\n", sig_num);
   close(socketfd);
+  free(server_response);
   exit(0); 
 }
 
@@ -248,10 +265,12 @@ int main (int argc, char **argv) {
   server_address.sin_addr.s_addr = INADDR_ANY;
   if (bind(socketfd, (struct sockaddr*)&server_address, sizeof(server_address)) == -1) {
     fprintf(stderr, "Binding error.\n");
+    close(socketfd);
     return -1;
   }
   if (listen(socketfd, 1) == -1) {
     fprintf(stderr, "Listening error.\n");
+    close(socketfd);
     return -1;
   }
 
@@ -263,10 +282,11 @@ int main (int argc, char **argv) {
   memset(client_message, '\0', sizeof(client_message));
 
   // server response
-  unsigned response_capacity = strlen("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain;\r\n\r\nBad Request");
-  char *server_response = calloc(response_capacity, 1);
+  unsigned response_capacity = strlen("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain;Content-Length: max_number\r\n\r\nBad Request");
+  server_response = calloc(response_capacity + 1, 1);
   if (server_response == NULL) {
     fprintf(stderr, "Couldn't allocate the memory.\n");
+    close(socketfd);
     return -1;
   }
   memset(server_response, '\0', response_capacity);
@@ -323,5 +343,6 @@ int main (int argc, char **argv) {
 
   // close server socket 
   close(socketfd);
+  free(server_response);
   return 0;
 }
