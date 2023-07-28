@@ -4,6 +4,8 @@ Author:  Lucie Svobodová, xsvobo1x@stud.fit.vutbr.cz
 Faculty: Faculty of Information Technology, BUT  
 Course:  Computer Communications and Networks (IPK), 2021/2022  
 
+Evaluation: 20/20 points  
+
 This project implements a lightweight server for Linux that uses HTTP protocol for the communication. The server provides information about the system. It sends HTTP responses for these three queries (that are sent to the server by GET command):
 - hostname (`/hostname`) 
 - cpu-name (`/cpu-name`)
